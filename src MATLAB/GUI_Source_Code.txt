@@ -1,0 +1,337 @@
+classdef solveBarOneDim < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        OneDimBarSolverUIFigure        matlab.ui.Figure
+        GridLayout                     matlab.ui.container.GridLayout
+        LeftPanel                      matlab.ui.container.Panel
+        NumberofCellsEditField         matlab.ui.control.NumericEditField
+        NumberofCellsLabel             matlab.ui.control.Label
+        LeftBoundaryTemperatureKEditField  matlab.ui.control.NumericEditField
+        LeftBoundaryTemperatureKEditFieldLabel  matlab.ui.control.Label
+        RightBoundaryTemperatureKEditField  matlab.ui.control.NumericEditField
+        RightBoundaryTemperatureKEditFieldLabel  matlab.ui.control.Label
+        VolumetricHeatSourceWm3EditField  matlab.ui.control.NumericEditField
+        VolumetricHeatSourceWm3EditFieldLabel  matlab.ui.control.Label
+        ThermalConductivityWmKEditField  matlab.ui.control.NumericEditField
+        ThermalConductivityWmKEditFieldLabel  matlab.ui.control.Label
+        CrossSectionalAream2EditField  matlab.ui.control.NumericEditField
+        CrossSectionalAream2EditFieldLabel  matlab.ui.control.Label
+        LengthmEditField               matlab.ui.control.NumericEditField
+        LengthmEditFieldLabel          matlab.ui.control.Label
+        SimulateButton                 matlab.ui.control.Button
+        PhysicalParametersLabel        matlab.ui.control.Label
+        GridSpecificationsLabel        matlab.ui.control.Label
+        BoundaryConditionsLabel        matlab.ui.control.Label
+        RightPanel                     matlab.ui.container.Panel
+        PrincipalInterestUIAxes        matlab.ui.control.UIAxes
+    end
+
+    % Properties that correspond to apps with auto-reflow
+    properties (Access = private)
+        onePanelWidth = 576;
+    end
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Changes arrangement of the app based on UIFigure width
+        function updateAppLayout(app, event)
+            currentFigureWidth = app.OneDimBarSolverUIFigure.Position(3);
+            if(currentFigureWidth <= app.onePanelWidth)
+                % Change to a 2x1 grid
+                app.GridLayout.RowHeight = {519, 519};
+                app.GridLayout.ColumnWidth = {'1x'};
+                app.RightPanel.Layout.Row = 2;
+                app.RightPanel.Layout.Column = 1;
+            else
+                % Change to a 1x2 grid
+                app.GridLayout.RowHeight = {'1x'};
+                app.GridLayout.ColumnWidth = {257, '1x'};
+                app.RightPanel.Layout.Row = 1;
+                app.RightPanel.Layout.Column = 2;
+            end
+        end
+
+        % Callback function
+        function ButtonPushed(app, event)
+                
+        end
+
+        % Button pushed function: SimulateButton
+        function SimulateButtonPushed(app, event)
+
+                T_A = app.LeftBoundaryTemperatureKEditField.Value;
+                T_B = app.RightBoundaryTemperatureKEditField.Value;
+                q_gen = app.VolumetricHeatSourceWm3EditField.Value;
+
+                A = app.CrossSectionalAream2EditField.Value;
+                L = app.LengthmEditField.Value;
+                N = app.NumberofCellsEditField.Value;
+
+                k = app.ThermalConductivityWmKEditField.Value;
+                L_cell = L / N;         %length of each cell in [m]
+                d_LP = L_cell;          %distance bt left and point cell in consideration of centroids in [m]
+                d_PR = L_cell;          %distance bt point and right cell in consideration of centroids in [m]
+                d = d_LP;
+
+               
+                x_CFD = L_cell/2:L_cell:L;
+                x_CFD = [0; x_CFD.'; L];
+
+                % Calculate material properties
+                DA = k * A / d;         %material parameter in [W/K]
+                Dl_Al = DA;
+                Dr_Ar = DA;
+                SV = q_gen * A * L_cell;%heat source per unit volume per cell in [W]
+
+                A_mat = zeros(N,N);
+                S_mat = zeros(N,1);
+
+                % Assemble matrix
+                for i = 1:N
+                    for j = 1:N
+                        if i == 1
+                            %Left boundary cell
+                            a_L = 0;
+                            a_R = Dr_Ar;
+
+                            S_p = -2 * Dl_Al;
+                            S_u = (T_A - 273) * (2 * Dl_Al) + q_gen * A * L_cell;
+
+                            a_p = a_L + a_R - S_p;
+
+                            A_mat(i, 1) = a_p;
+                            A_mat(i, 2) = -a_R;
+                            if j > 2
+                                A_mat(i, j) = 0;
+                            end
+                            S_mat(i, 1) = S_u;
+                        elseif i == N
+                            %Right boundary cell
+                            a_L = Dl_Al;
+                            a_R = 0;
+
+                            S_p = -2 * Dr_Ar;
+                            S_u = (T_B - 273)*(2 * Dr_Ar) + q_gen * A * L_cell;
+
+                            a_p = a_L + a_R - S_p;
+
+                            A_mat(i, N-1) = -a_L;
+                            A_mat(i, N) = a_p;
+                            if j < N - 1
+                                A_mat(i, j) = 0;
+                            end
+                            S_mat(i, 1) = S_u;
+                        else
+                            %Interior cells
+                            a_L = Dl_Al;
+                            a_R = Dr_Ar;
+
+                            S_p = 0;
+                            S_u = q_gen * A * L_cell;
+
+                            a_p = a_L + a_R - S_p;
+
+                            A_mat(i, i-1) = -a_L;
+                            A_mat(i, i) = a_p;
+                            A_mat(i, i+1) = -a_R;
+                            if j > (i + 1)
+                                A_mat(i, j) = 0;
+                            end
+
+                            S_mat(i, 1) = S_u;
+                        end
+                    end
+                end
+
+                %Solve system
+                
+                T_CFD = pcg(A_mat, S_mat, 1e-6, 1000); %preconditioned conjugate gradients method
+                T_CFD = [T_A-273; T_CFD; T_B-273];
+
+                x = linspace(0, L, 5000);
+
+                %Calcualte analytical temperature distribution
+                T_Analytical = T_A + x ./ L .* (T_B - T_A) + q_gen ./ (2 * k) .* x .* (L - x) - 273;
+
+                plot(app.PrincipalInterestUIAxes, x_CFD, T_CFD, 'o'); hold(app.PrincipalInterestUIAxes, 'on');
+                plot(app.PrincipalInterestUIAxes, x, T_Analytical, '-b', 'LineWidth', 2);
+                hold(app.PrincipalInterestUIAxes,'off');
+                legend(app.PrincipalInterestUIAxes,{'CFD','Analytical'},'Location','Best')
+                xlim(app.PrincipalInterestUIAxes,'auto'); 
+                ylim(app.PrincipalInterestUIAxes,'auto');
+  
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create OneDimBarSolverUIFigure and hide until all components are created
+            app.OneDimBarSolverUIFigure = uifigure('Visible', 'off');
+            app.OneDimBarSolverUIFigure.AutoResizeChildren = 'off';
+            app.OneDimBarSolverUIFigure.Color = [0.0745 0.6235 1];
+            app.OneDimBarSolverUIFigure.Position = [100 100 865 519];
+            app.OneDimBarSolverUIFigure.Name = '1D Conduction Simulation';
+            app.OneDimBarSolverUIFigure.SizeChangedFcn = createCallbackFcn(app, @updateAppLayout, true);
+
+            % Create GridLayout
+            app.GridLayout = uigridlayout(app.OneDimBarSolverUIFigure);
+            app.GridLayout.ColumnWidth = {257, '1x'};
+            app.GridLayout.RowHeight = {'1x'};
+            app.GridLayout.ColumnSpacing = 0;
+            app.GridLayout.RowSpacing = 0;
+            app.GridLayout.Padding = [0 0 0 0];
+            app.GridLayout.Scrollable = 'on';
+
+            % Create LeftPanel
+            app.LeftPanel = uipanel(app.GridLayout);
+            app.LeftPanel.Layout.Row = 1;
+            app.LeftPanel.Layout.Column = 1;
+            app.LeftPanel.Scrollable = 'on';
+
+            % Create BoundaryConditionsLabel
+            app.BoundaryConditionsLabel = uilabel(app.LeftPanel);
+            app.BoundaryConditionsLabel.FontSize = 16;
+            app.BoundaryConditionsLabel.FontWeight = 'bold';
+            app.BoundaryConditionsLabel.Position = [57 473 168 25];
+            app.BoundaryConditionsLabel.Text = 'Boundary Conditions';
+
+            % Create GridSpecificationsLabel
+            app.GridSpecificationsLabel = uilabel(app.LeftPanel);
+            app.GridSpecificationsLabel.FontSize = 16;
+            app.GridSpecificationsLabel.FontWeight = 'bold';
+            app.GridSpecificationsLabel.Position = [58 338 172 22];
+            app.GridSpecificationsLabel.Text = 'Grid Specifications';
+
+            % Create PhysicalParametersLabel
+            app.PhysicalParametersLabel = uilabel(app.LeftPanel);
+            app.PhysicalParametersLabel.FontSize = 16;
+            app.PhysicalParametersLabel.FontWeight = 'bold';
+            app.PhysicalParametersLabel.Position = [62 175 162 22];
+            app.PhysicalParametersLabel.Text = 'Physical Parameters';
+
+            % Create SimulateButton
+            app.SimulateButton = uibutton(app.LeftPanel, 'push');
+            app.SimulateButton.ButtonPushedFcn = createCallbackFcn(app, @SimulateButtonPushed, true);
+            app.SimulateButton.Position = [84 37 100 22];
+            app.SimulateButton.Text = 'Simulate';
+
+            % Create LengthmEditFieldLabel
+            app.LengthmEditFieldLabel = uilabel(app.LeftPanel);
+            app.LengthmEditFieldLabel.HorizontalAlignment = 'right';
+            app.LengthmEditFieldLabel.Position = [66 264 62 22];
+            app.LengthmEditFieldLabel.Text = 'Length [m]';
+
+            % Create LengthmEditField
+            app.LengthmEditField = uieditfield(app.LeftPanel, 'numeric');
+            app.LengthmEditField.Position = [144 264 107 22];
+
+            % Create CrossSectionalAream2EditFieldLabel
+            app.CrossSectionalAream2EditFieldLabel = uilabel(app.LeftPanel);
+            app.CrossSectionalAream2EditFieldLabel.HorizontalAlignment = 'right';
+            app.CrossSectionalAream2EditFieldLabel.Position = [41 215 90 28];
+            app.CrossSectionalAream2EditFieldLabel.Text = {'Cross-Sectional'; 'Area [m^2]'};
+
+            % Create CrossSectionalAream2EditField
+            app.CrossSectionalAream2EditField = uieditfield(app.LeftPanel, 'numeric');
+            app.CrossSectionalAream2EditField.Position = [146 221 104 22];
+
+            % Create ThermalConductivityWmKEditFieldLabel
+            app.ThermalConductivityWmKEditFieldLabel = uilabel(app.LeftPanel);
+            app.ThermalConductivityWmKEditFieldLabel.HorizontalAlignment = 'right';
+            app.ThermalConductivityWmKEditFieldLabel.Position = [16 136 118 28];
+            app.ThermalConductivityWmKEditFieldLabel.Text = {'Thermal Conductivity'; '[W/(m-K)]'};
+
+            % Create ThermalConductivityWmKEditField
+            app.ThermalConductivityWmKEditField = uieditfield(app.LeftPanel, 'numeric');
+            app.ThermalConductivityWmKEditField.Position = [149 142 102 22];
+
+            % Create VolumetricHeatSourceWm3EditFieldLabel
+            app.VolumetricHeatSourceWm3EditFieldLabel = uilabel(app.LeftPanel);
+            app.VolumetricHeatSourceWm3EditFieldLabel.HorizontalAlignment = 'right';
+            app.VolumetricHeatSourceWm3EditFieldLabel.Position = [45 83 90 28];
+            app.VolumetricHeatSourceWm3EditFieldLabel.Text = {'Volumetric Heat'; 'Source [W/m^3]'};
+
+            % Create VolumetricHeatSourceWm3EditField
+            app.VolumetricHeatSourceWm3EditField = uieditfield(app.LeftPanel, 'numeric');
+            app.VolumetricHeatSourceWm3EditField.Position = [150 89 100 22];
+
+            % Create RightBoundaryTemperatureKEditFieldLabel
+            app.RightBoundaryTemperatureKEditFieldLabel = uilabel(app.LeftPanel);
+            app.RightBoundaryTemperatureKEditFieldLabel.HorizontalAlignment = 'right';
+            app.RightBoundaryTemperatureKEditFieldLabel.Position = [38 375 91 28];
+            app.RightBoundaryTemperatureKEditFieldLabel.Text = {'Right Boundary'; 'Temperature [K]'};
+
+            % Create RightBoundaryTemperatureKEditField
+            app.RightBoundaryTemperatureKEditField = uieditfield(app.LeftPanel, 'numeric');
+            app.RightBoundaryTemperatureKEditField.Position = [143 380 108 23];
+
+            % Create LeftBoundaryTemperatureKEditFieldLabel
+            app.LeftBoundaryTemperatureKEditFieldLabel = uilabel(app.LeftPanel);
+            app.LeftBoundaryTemperatureKEditFieldLabel.HorizontalAlignment = 'right';
+            app.LeftBoundaryTemperatureKEditFieldLabel.Position = [38 421 91 28];
+            app.LeftBoundaryTemperatureKEditFieldLabel.Text = {'Left Boundary'; 'Temperature [K]'};
+
+            % Create LeftBoundaryTemperatureKEditField
+            app.LeftBoundaryTemperatureKEditField = uieditfield(app.LeftPanel, 'numeric');
+            app.LeftBoundaryTemperatureKEditField.Position = [144 424 107 28];
+
+            % Create NumberofCellsLabel
+            app.NumberofCellsLabel = uilabel(app.LeftPanel);
+            app.NumberofCellsLabel.HorizontalAlignment = 'right';
+            app.NumberofCellsLabel.Position = [38 303 92 22];
+            app.NumberofCellsLabel.Text = 'Number of Cells';
+
+            % Create NumberofCellsEditField
+            app.NumberofCellsEditField = uieditfield(app.LeftPanel, 'numeric');
+            app.NumberofCellsEditField.Position = [144 302 108 25];
+
+            % Create RightPanel
+            app.RightPanel = uipanel(app.GridLayout);
+            app.RightPanel.Layout.Row = 1;
+            app.RightPanel.Layout.Column = 2;
+            app.RightPanel.Scrollable = 'on';
+
+            % Create PrincipalInterestUIAxes
+            app.PrincipalInterestUIAxes = uiaxes(app.RightPanel);
+            title(app.PrincipalInterestUIAxes, 'Temperature Distribution')
+            xlabel(app.PrincipalInterestUIAxes, 'x [m]')
+            ylabel(app.PrincipalInterestUIAxes, 'Temperature [°C]')
+            app.PrincipalInterestUIAxes.FontSize = 14;
+            app.PrincipalInterestUIAxes.Position = [36 118 532 307];
+
+            % Show the figure after all components are created
+            app.OneDimBarSolverUIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = solveBarOneDim
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.OneDimBarSolverUIFigure)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.OneDimBarSolverUIFigure)
+        end
+    end
+end
